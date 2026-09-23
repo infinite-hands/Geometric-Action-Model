@@ -119,6 +119,12 @@ dataset:
   source_fps: 30           # the cell records at 30 Hz, not LIBERO's 20
   live_proprio: "raw7"     # serving: the seven values arrive as obs["proprio"] already, so take
                            # them as-is rather than reconstructing an end-effector pose we do not have
+  # Serving reads these, and their COUNT must equal n_views or the rollout raises. Declared rather
+  # than left to default, which is LIBERO's two keys. _normalize_rollout_camera_key strips the
+  # "observation.images." prefix and appends "_image" to anything it does not recognise, so these
+  # three resolve to cam_high_image / cam_left_wrist_image / cam_right_wrist_image -- which is what
+  # the policy server must key its observation dict by, in this order.
+  rollout_camera_keys: ["cam_high", "cam_left_wrist", "cam_right_wrist"]
   da3_input_rotate180: false  # LIBERO's frames are upside down; ours are not
   da3_input_vflip: false
   gt_depth_root: null
