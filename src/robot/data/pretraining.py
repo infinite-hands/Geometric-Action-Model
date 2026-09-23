@@ -801,8 +801,10 @@ class LeRobotSequenceDataset(_StatisticsMixin, Dataset):
                 "Open X-Embodiment pretraining requires lerobot. Upstream documents 0.4.4, but that "
                 "pins huggingface-hub<0.36.0 against this repo's own huggingface_hub==1.10.1 "
                 "(transformers 5.5.4 needs the 1.x line) and the two cannot be resolved together. "
-                "Use lerobot>=0.5.0, which asks for huggingface-hub>=1.0.0, reads the same v3.0 "
-                "codebase version, and uses the same API touched here."
+                "Use lerobot==0.5.0, which asks for huggingface-hub>=1.0.0, reads the same v3.0 "
+                "codebase version, and uses the same API touched here. Not 0.5.1+: those raise the "
+                "floor to torch>=2.7 / torchvision>=0.22.0, two minor versions past what this repo "
+                "was validated against, for nothing this loader uses."
             ) from exc
         self.spec = spec
         self.root = Path(root).expanduser()
