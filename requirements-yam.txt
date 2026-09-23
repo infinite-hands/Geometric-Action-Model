@@ -1,0 +1,72 @@
+# =============================================================================
+# GAM on the Infinite Hands YAM cell: training from LeRobot data, and serving.
+#
+# requirements.txt is the LIBERO/LIBERO-Plus environment and CANNOT be used here.
+# It pins the simulator stack, and three of those pins are irreconcilable with
+# lerobot -- which docs/pretraining-data.md itself tells you to install for the
+# gam_pretraining loader:
+#
+#     requirements.txt            lerobot 0.5.0
+#     numpy==1.26.4               numpy>=2.0.0,<2.3.0
+#     huggingface_hub==1.10.1     (0.4.4 wanted <0.36.0; 0.5.0 wants >=1.0.0, so 0.5.0 is fine)
+#     torchvision==0.20.1 (Dockerfile) torchvision>=0.21.0
+#
+# A single dependency resolution refuses that outright. The documented
+# `pip install -r requirements.txt && pip install lerobot==0.4.4` only appears to
+# work because the second install silently overwrites pins from the first, which
+# leaves an environment nobody has actually validated.
+#
+# This file resolves it the honest way: the closed-loop LIBERO evaluation is off
+# on this path (training.eval_every is set beyond max_steps in configs/training/yam/),
+# so the simulator is not installed at all, and numpy is left to the resolver.
+#
+# DROPPED, all LIBERO-simulator-only and all imported lazily inside functions
+# that this path never calls -- robosuite, mujoco, gym, gymnasium, bddl,
+# Farama-Notifications, easydict, future, PyOpenGL, Wand, moviepy -- plus numba,
+# llvmlite, scikit-image and scipy, which src/ never imports at all.
+#
+# KEPT even though they look like eval-only: matplotlib, plotly, imageio and
+# imageio-ffmpeg back robot/viz/visualization.py, which training calls every
+# `vis_every` steps; and wandb, which train_robot.py imports lazily regardless of
+# whether --wandb was passed.
+# =============================================================================
+
+# ---- torch: installed separately, before this file, with the CUDA index ----
+# torch==2.6.0 / torchvision==0.21.0 -- the lowest pair satisfying GAM's own
+# `torch>=2.5` (flex_attention / BlockMask) and lerobot's `torchvision>=0.21.0`.
+
+# ---- model stack ----
+transformers==5.5.4
+tokenizers==0.22.2
+huggingface_hub==1.10.1
+safetensors==0.5.3
+accelerate==1.13.0
+timm==1.0.26
+einops==0.8.1
+
+# ---- training ----
+deepspeed==0.18.8
+omegaconf==2.3.0
+antlr4-python3-runtime==4.9.3
+cloudpickle==3.1.1
+protobuf==4.24.4
+tqdm==4.67.1
+wandb==0.24.2
+
+# ---- data ----
+# numpy intentionally unpinned: lerobot requires >=2.0, requirements.txt pins
+# 1.26.4 for the simulator stack this file drops.
+numpy
+datasets==4.8.4
+h5py==3.16.0
+av==15.1.0
+
+# ---- image / video ----
+opencv-python-headless==4.11.0.86
+pillow==11.2.1
+imageio==2.37.3
+imageio-ffmpeg==0.6.0
+
+# ---- visualisation called during training (vis_every) ----
+matplotlib==3.10.3
+plotly==5.24.1
