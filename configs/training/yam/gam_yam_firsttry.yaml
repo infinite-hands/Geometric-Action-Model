@@ -1,0 +1,129 @@
+# Infinite Hands YAM full-corpus first-try split: GAM fine-tuned on the right arm alone.
+#
+# Derived from configs/training/libero_unified/gam/chunk8_150k_2node.yaml. Only the deltas from that
+# file are meaningful; everything repeated here is repeated so one file describes one run.
+#
+# The GAM state does NOT arrive through stage_1.ckpt_path. That path loads a DA3 backbone with
+# strict=False, and a GAM checkpoint's keys (student_da3/action_head/future_predictor/...) match
+# none of a DA3 module's parameter names, so it would load nothing and not raise. The warm start is
+# `--ckpt <pretrained-gam.pt> --reset-optimizer-state --refresh-action-stats`, and
+# --refresh-action-stats is mandatory: the checkpoint's action_normalizer is q01/q99 over RoboCasa
+# Cartesian deltas, which is the wrong scale and the wrong units for absolute joint radians, and
+# nothing checks it because both are 7 wide.
+
+stage_1:
+  ckpt_path: "${oc.env:DA3_BASE_CKPT,${oc.env:DA3_ROOT,.}/checkpoints/track4world_da3.pth}"
+  encoder_input_size: 224
+  normalization_stat_path: null
+
+da3_finetune:
+  enabled: true
+  freeze_blocks_before: 13
+  n_action_steps: 8        # must equal dataset.future_steps + 1
+  n_views: 3               # cam_high + both wrists; resolve_da3_n_views requires this to match dataset.n_views
+  use_temporal_embed: false
+  action_input_rate: 0.4
+
+action_head:
+  type: "mlp_resnet"
+  input_dim: 1536
+  hidden_dim: 1536
+  n_dims: 7                # right arm: 6 joints + gripper
+  chunk_size: 8            # chunk_pos_embed is (chunk_size, hidden_dim) -- the one config-pinned shape
+  chunk_position_encoding: "learned"
+  num_blocks: 2
+  pool_mode: "mean"        # NOT concat: mean is what lets n_views differ from the checkpoint's, and
+                           # what makes scoring with a camera dropped possible without retraining
+
+proprioception:
+  proprio_dim: 7
+
+regularization:
+  lambda_feat: 0.0
+  layer_weight_min: 0.5
+  adaptive_lambda: false
+  # 1.0, not the LIBERO config's 0.05. Upstream's own per_suite header records that at 0.05 "the
+  # depth raw value was flat across 60 steps while action dropped 4x (depth signal effectively
+  # ignored)", and that 1.0 "lands depth at ~25% so it actually trains".
+  lambda_depth: 1.0
+  depth_grad_weight: 1.0
+  depth_decode_chunk_size: 1
+  lambda_camera: 0.0
+  # Our corpus carries no sensor depth, so the frozen teacher decodes the depth target instead and
+  # the geometric prior is preserved by self-distillation. These two are ALTERNATIVES, not a pair:
+  # with the fallback on, skip never fires; with both off and no ground truth, the loss raises.
+  teacher_depth_fallback: true
+  skip_depth_if_no_gt: true
+
+predictor:
+  enabled: true
+  type: "gam"              # the only value the released code accepts
+  d_model: 1024
+  depth: 12
+  num_heads: 16
+  ffn_ratio: 4.0
+  dropout: 0.0
+  num_patches_per_view: 256
+  use_language: true
+  language_dim: 768
+  language_len: 77
+  clip_model: "openai/clip-vit-large-patch14"
+  lambda_feat_future: 1.0
+  lambda_sigreg: 0.0
+  H_choices: [1, 2, 3, 4, 5, 6, 7]
+  H_weights: [0.25, 0.20, 0.15, 0.12, 0.10, 0.09, 0.09]
+  num_register_tokens: 0
+  deep_gradient_checkpointing: false
+
+training:
+  global_batch_size: 24
+  micro_batch_size: 2      # UNMEASURED at n_views 3. micro2.json is validated at 2 views; three raises
+                           # visual tokens per sample by half. If it OOMs: deep_gradient_checkpointing
+                           # first, then micro1.json with grad_accum_steps 6.
+  base_lr: 5.0e-5
+  head_lr_mult: 10.0
+  predictor_lr_mult: 0.2
+  adam_eps: 1.0e-6
+  weight_decay: 0.0
+  lambda_action: 3.0
+  grad_accum_steps: 3      # 4 GPUs x micro 2 x 3 = global 24
+  epochs: 500000
+  clip_grad: 1.0
+  warmup_steps: 500
+  max_steps: 20000         # ~2.1 passes over the corpus's usable sample starts; the recipe overrides it
+  min_lr_ratio: 0.01
+  log_every: 25
+  ckpt_every: 2000
+  vis_every: 500
+  eval_every: 999999       # closed-loop LIBERO eval OFF: it is the only thing that would import
+                           # libero/robosuite, and neither is installed in our image
+  global_seed: 42
+  num_workers: 8
+  bf16: true
+  compile: false
+
+dataset:
+  type: "gam_pretraining"
+  sources: ["open_x_embodiment"]
+  openx_root: "/tmp/gam-datasets"        # the recipe overrides this with the per-run staged copy
+  openx_datasets: ["yam_firsttry_right7"]
+  stats_dir: "/checkpoints/gam-assets/yam_firsttry_right7/_stats"
+  image_size: [224, 224]
+  future_steps: 7
+  chunk_size: 8
+  include_current_action: true
+  eval_ratio: 0.05         # a TEMPORAL tail (episodes[-n:]), not a random split: an in-training loss
+                           # monitor only. The real holdout is a separate repo_id built by training/splits.py.
+  proprio_dim: 7
+  n_views: 3
+  source_fps: 30           # the cell records at 30 Hz, not LIBERO's 20
+  live_proprio: "raw7"     # serving: the seven values arrive as obs["proprio"] already, so take
+                           # them as-is rather than reconstructing an end-effector pose we do not have
+  da3_input_rotate180: false  # LIBERO's frames are upside down; ours are not
+  da3_input_vflip: false
+  gt_depth_root: null
+  gt_depth_require_geometry: false
+  action_stats_samples: 10000
+  proprio_stats_samples: 10000
+
+use_dit: false

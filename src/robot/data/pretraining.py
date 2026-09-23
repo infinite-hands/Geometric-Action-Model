@@ -52,6 +52,19 @@ CANONICAL_ACTION = (
 PAPER_SOURCE_RATIOS = {"open_x_embodiment": 0.72, "mimicgen": 0.18, "robocasa365": 0.10}
 MIMICGEN_ACTION_SCALE = (0.05, 0.05, 0.05, 0.5, 0.5, 0.5)
 FULL_ACTION_MASK = (True,) * 7
+# --- Infinite Hands YAM cell -------------------------------------------------
+# The bimanual YAM records a 14-dim vector [L j0..5, L grip, R j0..5, R grip] of ABSOLUTE joint
+# positions (the leader arm's, as commanded), not end-effector deltas. The `yam_right7` transforms
+# below slice the right arm out of it and pass those seven values through unchanged, so CANONICAL_ACTION's
+# channel names ("dx", "dy", ..., "gripper_close") do NOT describe a yam_* spec: dims 0-5 are joint
+# angles in radians and dim 6 is a gripper opening in [0, 1] where 1 is OPEN.
+#
+# The gripper polarity is deliberately NOT flipped to this file's `gripper_close` convention. The
+# action head is retrained from Cartesian deltas into joint radians regardless, so the pretrained
+# channel's polarity carries nothing across, while every surface on the robot side is 1 = open --
+# and an inversion here would be a second place for that sign to be wrong. A `_gclose` variant can
+# be registered beside the spec if it is ever worth A/B-ing, rather than hidden behind a flag.
+YAM_RIGHT_ARM_DIMS = slice(7, 14)  # mirrors hardware.constants.RIGHT_ARM_DIMS in the infinite-hands repo
 
 
 @dataclass(frozen=True)
@@ -174,6 +187,22 @@ OXE_SPECS = (
     _spec("language_table", "tailong-wu/language_table_lerobot_v30", 100,
           ("observation.images.rgb",), "xy_only", "language_table",
           action_mask=(True, True, False, False, False, False, False)),
+    # --- Infinite Hands YAM cell. repo_id is a local path under dataset.openx_root, not a Hub id.
+    # --- Camera order is the rig's fixed CAMERA_ROLES order and fixes each view's slot: training and
+    # --- the policy server must agree on it. Our converter writes RGB (cv2.COLOR_BGR2RGB before
+    # --- add_frame), so bgr_cameras stays empty. Both wrist keys contain "wrist", so they take the
+    # --- full crop and no rotation while only cam_high gets the random-resized-crop and +/-5 deg --
+    # --- free augmentation on exactly the fixed overhead camera the viewpoint metric is about ---
+    _spec("yam_bagging_right7", "local/yam_bagging_three_v3", 1,
+          ("observation.images.cam_high",
+           "observation.images.cam_left_wrist",
+           "observation.images.cam_right_wrist"),
+          "yam_right7", "yam_right7"),
+    _spec("yam_firsttry_right7", "local/yam_fullcorpus_teleop_firsttry_20260914_v3", 1,
+          ("observation.images.cam_high",
+           "observation.images.cam_left_wrist",
+           "observation.images.cam_right_wrist"),
+          "yam_right7", "yam_right7"),
 )
 
 
@@ -239,6 +268,10 @@ def canonicalize_state(raw: Any, transform: str) -> torch.Tensor:
         return torch.cat((state[..., :3], state.new_zeros(n, 2), state[..., 3:4], zero), -1)
     if transform == "language_table":
         return torch.cat((state[..., :2], state.new_zeros(n, 5)), -1)
+    if transform == "yam_right7":
+        # Absolute right-arm joints + gripper, straight through. No padding, no rescaling, no unit
+        # change: proprio_dim is 7 and these ARE the seven values.
+        return state[..., YAM_RIGHT_ARM_DIMS]
     if transform == "robocasa":
         pos = state[..., 7:10]
         rpy = _quat_xyzw_to_rpy(state[..., 10:14])
@@ -339,6 +372,23 @@ def canonicalize_action(
         action = _pad7(action[..., :-1])
     elif transform == "xy_only":
         action = torch.cat((action[..., :2], action.new_zeros(action.shape[0], 5)), -1)
+    elif transform == "yam_right7":
+        # The leader-commanded right arm, absolute. The shared tail below applies _pad7 (an identity
+        # at 7) and the action mask, so nothing further is needed here.
+        action = action[..., YAM_RIGHT_ARM_DIMS]
+    elif transform == "yam_right7_delta":
+        # The same seven dims as a residual against the observed state -- GAM's whole pretraining is
+        # in a residual action space, so this is the A/B against `yam_right7` that says whether the
+        # pretrained prior transfers. The policy server adds the measured state back.
+        #
+        # `state` arrives ALREADY canonicalized: LeRobotSequenceDataset._state runs canonicalize_state
+        # before handing it here, so it is the 7-dim right arm, not the raw 14-dim vector. Only the
+        # six joints are differenced; dim 6 stays the absolute gripper opening, because every
+        # canonical action in this file carries an absolute gripper rather than a change in one.
+        if state is None:
+            raise ValueError("yam_right7_delta needs the observed state to difference against.")
+        joints = action[..., YAM_RIGHT_ARM_DIMS][..., :6] - state[..., :6]
+        action = torch.cat((joints, action[..., YAM_RIGHT_ARM_DIMS][..., 6:7]), -1)
     elif transform == "robocasa":
         if action.shape[-1] >= 12:
             action = torch.cat((action[..., 5:11], action[..., 11:12]), -1)

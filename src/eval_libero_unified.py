@@ -1188,9 +1188,43 @@ def obs_to_canonical_7d_proprio(obs: dict[str, Any], orientation_mode: str = "rp
     return torch.cat([pos.to(torch.float32), orient.to(torch.float32), grip_width], dim=0)
 
 
+LIVE_PROPRIO_LIBERO = "libero_robosuite"
+LIVE_PROPRIO_RAW7 = "raw7"
+
+
+def obs_to_raw7_proprio(obs: dict[str, Any], orientation_mode: str = "rpy") -> torch.Tensor:
+    """Take the seven proprio values straight off the observation, in the units they were trained in.
+
+    For an embodiment whose proprio IS the canonical seven -- the Infinite Hands YAM cell serves the
+    right arm's six joint angles plus a gripper opening -- there is nothing to reconstruct. The
+    LIBERO converter exists because robosuite reports an end-effector pose split across three keys;
+    composing one here just to decompose it again would mean inventing a pose we do not have.
+
+    `orientation_mode` is accepted and ignored: these dims are joint angles, not an orientation.
+    """
+    del orientation_mode
+    if "proprio" not in obs:
+        raise KeyError(f"raw7 proprio needs obs['proprio'] (7 values); keys: {sorted(obs.keys())}")
+    values = torch.as_tensor(np.asarray(obs["proprio"], dtype=np.float32)).flatten()
+    if values.numel() != 7:
+        raise ValueError(f"raw7 proprio expected 7 values, got {values.numel()}")
+    return values.to(torch.float32)
+
+
 def select_live_proprio_converter(dataset_cfg: dict[str, Any]) -> Callable[[dict[str, Any], str], torch.Tensor]:
-    del dataset_cfg
-    return obs_to_canonical_7d_proprio
+    """The converter from a live observation to the canonical 7-dim proprio, chosen by the dataset.
+
+    `dataset.live_proprio` defaults to the LIBERO/robosuite reconstruction, so every existing config
+    behaves exactly as before.
+    """
+    mode = str((dataset_cfg or {}).get("live_proprio", LIVE_PROPRIO_LIBERO)).strip().lower()
+    if mode == LIVE_PROPRIO_LIBERO:
+        return obs_to_canonical_7d_proprio
+    if mode == LIVE_PROPRIO_RAW7:
+        return obs_to_raw7_proprio
+    raise ValueError(
+        f"Unknown dataset.live_proprio={mode!r}; expected {LIVE_PROPRIO_LIBERO!r} or {LIVE_PROPRIO_RAW7!r}."
+    )
 
 
 def canonical_to_libero_action(
