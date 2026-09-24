@@ -76,7 +76,15 @@ predictor:
   deep_gradient_checkpointing: false
 
 training:
-  global_batch_size: 24
+  # global = n_gpus x micro_batch_size x grad_accum_steps, and the deepspeed json pins the
+  # latter two -- micro2.json is micro 2, accum 1. The compute profile asks for ONE L40S, so
+  # this is 1 x 2 x 1 = 2. It was 24 here with a comment reading '4 GPUs x micro 2 x 3', which
+  # described a four-GPU run nothing requests; upstream's own 24 is 8 GPUs x micro 3 x accum 1.
+  # A global batch of 2 is small for a 1B fine-tune. Raising it costs either wall-clock
+  # (accumulation: a deepspeed json with accum N makes every optimizer step N forwards) or
+  # money (more GPUs, which needs n_gpus set on the profile too). That is a measured decision,
+  # not a guessed one -- settle it against the probe's s/step rather than picking a number here.
+  global_batch_size: 2
   micro_batch_size: 2      # UNMEASURED at n_views 3. micro2.json is validated at 2 views; three raises
                            # visual tokens per sample by half. If it OOMs: deep_gradient_checkpointing
                            # first, then micro1.json with grad_accum_steps 6.
@@ -86,7 +94,7 @@ training:
   adam_eps: 1.0e-6
   weight_decay: 0.0
   lambda_action: 3.0
-  grad_accum_steps: 3      # 4 GPUs x micro 2 x 3 = global 24
+  grad_accum_steps: 1      # must equal gradient_accumulation_steps in the deepspeed json
   epochs: 500000
   clip_grad: 1.0
   warmup_steps: 500
