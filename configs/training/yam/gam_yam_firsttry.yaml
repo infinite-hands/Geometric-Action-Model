@@ -129,7 +129,14 @@ dataset:
   da3_input_vflip: false
   gt_depth_root: null
   gt_depth_require_geometry: false
-  action_stats_samples: 10000
-  proprio_stats_samples: 10000
+  # 1000, not upstream's 10000, and the reason is cost rather than taste.
+  # _StatisticsMixin._statistics calls __getitem__ for every sample, i.e. the FULL sample --
+  # three cameras x eight anchors = 24 video decodes each. At 10000 action + 10000 proprio that
+  # is ~480k frame decodes before step 1, and on a Volume-backed dataset it runs for hours while
+  # the GPU sits idle. Each sample already carries action_steps x chunk_size = 64 action rows, so
+  # 1000 samples is 64k rows behind a 7-dim q01/q99 -- ample for the quantiles these feed.
+  # The stats are written to stats_dir and reused, so this is a first-run cost only.
+  action_stats_samples: 1000
+  proprio_stats_samples: 1000
 
 use_dit: false
